@@ -3,25 +3,29 @@ use frame::ToFrameBody;
 use header::Header;
 use message_builder::MessageBuilder;
 use session::Session;
+use tokio_io;
 
-pub struct Transaction<'tx> {
+pub struct Transaction<'tx, T: 'static> {
     pub id: String,
-    pub session: &'tx mut Session,
+    pub session: &'tx mut Session<T>,
 }
 
-impl<'tx> Transaction<'tx> {
-    pub fn new(session: &'tx mut Session) -> Transaction<'tx> {
+impl<'tx, T: 'static> Transaction<'tx, T>
+where
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + 'static,
+{
+    pub fn new(session: &'tx mut Session<T>) -> Transaction<'tx, T> {
         Transaction {
             id: format!("tx/{}", session.generate_transaction_id()),
-            session: session,
+            session,
         }
     }
 
-    pub fn message<'builder, T: ToFrameBody>(
+    pub fn message<'builder, B: ToFrameBody>(
         &'builder mut self,
         destination: &str,
-        body_convertible: T,
-    ) -> MessageBuilder<'builder> {
+        body_convertible: B,
+    ) -> MessageBuilder<'builder, T> {
         let mut send_frame = Frame::send(destination, body_convertible.to_frame_body());
         send_frame
             .headers

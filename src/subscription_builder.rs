@@ -3,17 +3,21 @@ use header::HeaderList;
 use option_setter::OptionSetter;
 use session::{OutstandingReceipt, ReceiptRequest, Session};
 use subscription::{AckMode, Subscription};
+use tokio_io;
 
-pub struct SubscriptionBuilder<'a> {
-    pub session: &'a mut Session,
+pub struct SubscriptionBuilder<'a, T: 'static> {
+    pub session: &'a mut Session<T>,
     pub destination: String,
     pub ack_mode: AckMode,
     pub headers: HeaderList,
     pub receipt_request: Option<ReceiptRequest>,
 }
 
-impl<'a> SubscriptionBuilder<'a> {
-    pub fn new(session: &'a mut Session, destination: String) -> Self {
+impl<'a, T> SubscriptionBuilder<'a, T>
+where
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + 'static,
+{
+    pub fn new(session: &'a mut Session<T>, destination: String) -> Self {
         SubscriptionBuilder {
             session: session,
             destination: destination,
@@ -58,10 +62,9 @@ impl<'a> SubscriptionBuilder<'a> {
         id_to_return
     }
 
-    #[allow(dead_code)]
-    pub fn with<T>(self, option_setter: T) -> SubscriptionBuilder<'a>
+    pub fn with<O>(self, option_setter: O) -> SubscriptionBuilder<'a, T>
     where
-        T: OptionSetter<SubscriptionBuilder<'a>>,
+        O: OptionSetter<SubscriptionBuilder<'a, T>>,
     {
         option_setter.set_option(self)
     }

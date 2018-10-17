@@ -21,6 +21,20 @@ pub struct SessionBuilder {
 }
 
 impl SessionBuilder {
+    pub fn start<'b, 'c>(self) -> ::std::io::Result<Session<TcpStream>> {
+        let address = (&self.config.host as &str, self.config.port)
+            .to_socket_addrs()?
+            .nth(0)
+            .ok_or(io::Error::new(
+                io::ErrorKind::Other,
+                "address provided resolved to nothing",
+            ))?;
+        let f = TcpStream::connect(&address);
+        Ok(Session::new(self.config, Box::new(f)))
+    }
+}
+
+impl SessionBuilder {
     pub fn new(host: &str, port: u16) -> SessionBuilder {
         let config = SessionConfig {
             host: host.to_owned(),
@@ -36,22 +50,9 @@ impl SessionBuilder {
         SessionBuilder { config: config }
     }
 
-    #[allow(dead_code)]
-    pub fn start<'b, 'c>(self) -> ::std::io::Result<Session> {
-        let address = (&self.config.host as &str, self.config.port)
-            .to_socket_addrs()?
-            .nth(0)
-            .ok_or(io::Error::new(
-                io::ErrorKind::Other,
-                "address provided resolved to nothing",
-            ))?;
-        Ok(Session::new(self.config, TcpStream::connect(&address)))
-    }
-
-    #[allow(dead_code)]
-    pub fn with<'b, T>(self, option_setter: T) -> SessionBuilder
+    pub fn with<'b, O>(self, option_setter: O) -> SessionBuilder
     where
-        T: OptionSetter<SessionBuilder>,
+        O: OptionSetter<SessionBuilder>,
     {
         option_setter.set_option(self)
     }

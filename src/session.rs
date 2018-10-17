@@ -7,14 +7,17 @@ use header::{self, Header};
 use message_builder::MessageBuilder;
 use session_builder::SessionConfig;
 use std::collections::hash_map::HashMap;
+use std::collections::VecDeque;
+use std::io::Error as IoError;
+use std::io::ErrorKind;
 use std::io::Result;
 use std::time::{Duration, Instant};
 use subscription::{AckMode, AckOrNack, Subscription};
 use subscription_builder::SubscriptionBuilder;
-use tokio::net::tcp::ConnectFuture;
 use tokio::net::TcpStream;
 use tokio_codec::Decoder;
 use tokio_codec::Framed;
+use tokio_io;
 use tokio_timer::Delay;
 use transaction::Transaction;
 
@@ -26,19 +29,29 @@ pub struct OutstandingReceipt {
 
 impl OutstandingReceipt {
     pub fn new(original_frame: Frame) -> Self {
-        OutstandingReceipt {
-            original_frame: original_frame,
-        }
+        OutstandingReceipt { original_frame }
     }
 }
+
 pub struct GenerateReceipt;
+
 pub struct ReceiptRequest {
     pub id: String,
 }
 
 impl ReceiptRequest {
     pub fn new(id: String) -> Self {
-        ReceiptRequest { id: id }
+        ReceiptRequest { id }
+    }
+}
+
+fn poll_timeout(mut delay: Option<&mut Delay>) -> Poll<(), IoError> {
+    match delay {
+        None => Ok(Async::NotReady),
+        Some(ref mut delay) => match delay.poll() {
+            Err(_e) => Err(IoError::new(ErrorKind::Other, "timer")),
+            Ok(res) => Ok(res),
+        },
     }
 }
 
@@ -70,16 +83,42 @@ impl SessionState {
     }
 }
 
+impl Session<TcpStream> {
+    pub fn reconnect(&mut self) -> ::std::io::Result<()> {
+        use std::io;
+        use std::net::ToSocketAddrs;
+
+        info!("Reconnecting...");
+
+        let address = (&self.config.host as &str, self.config.port)
+            .to_socket_addrs()?
+            .nth(0)
+            .ok_or(io::Error::new(
+                io::ErrorKind::Other,
+                "address provided resolved to nothing",
+            ))?;
+
+        let f = Box::new(TcpStream::connect(&address));
+        self.stream = StreamState::Connecting(f);
+        task::current().notify();
+        Ok(())
+    }
+}
+
 // *** Public API ***
-impl Session {
+impl<T> Session<T>
+where
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + 'static,
+{
     pub fn send_frame(&mut self, fr: Frame) {
         self.send(Transmission::CompleteFrame(fr))
     }
-    pub fn message<'builder, T: ToFrameBody>(
+
+    pub fn message<'builder, O: ToFrameBody>(
         &'builder mut self,
         destination: &str,
-        body_convertible: T,
-    ) -> MessageBuilder<'builder> {
+        body_convertible: O,
+    ) -> MessageBuilder<'builder, T> {
         let send_frame = Frame::send(destination, body_convertible.to_frame_body());
         MessageBuilder::new(self, send_frame)
     }
@@ -87,11 +126,11 @@ impl Session {
     pub fn subscription<'builder>(
         &'builder mut self,
         destination: &str,
-    ) -> SubscriptionBuilder<'builder> {
+    ) -> SubscriptionBuilder<'builder, T> {
         SubscriptionBuilder::new(self, destination.to_owned())
     }
 
-    pub fn begin_transaction<'b>(&'b mut self) -> Transaction<'b> {
+    pub fn begin_transaction<'b>(&'b mut self) -> Transaction<'b, T> {
         let mut transaction = Transaction::new(self);
         let _ = transaction.begin();
         transaction
@@ -106,23 +145,7 @@ impl Session {
     pub fn disconnect(&mut self) {
         self.send_frame(Frame::disconnect());
     }
-    pub fn reconnect(&mut self) -> ::std::io::Result<()> {
-        use std::io;
-        use std::net::ToSocketAddrs;
 
-        info!("Reconnecting...");
-
-        let address = (&self.config.host as &str, self.config.port)
-            .to_socket_addrs()?
-            .nth(0)
-            .ok_or(io::Error::new(
-                io::ErrorKind::Other,
-                "address provided resolved to nothing",
-            ))?;
-        self.stream = StreamState::Connecting(TcpStream::connect(&address));
-        task::current().notify();
-        Ok(())
-    }
     pub fn acknowledge_frame(&mut self, frame: &Frame, which: AckOrNack) {
         if let Some(header::Ack(ack_id)) = frame.headers.get_ack() {
             let ack_frame = if let AckOrNack::Ack = which {
@@ -134,16 +157,21 @@ impl Session {
         }
     }
 }
+
 // *** pub(crate) API ***
-impl Session {
-    pub(crate) fn new(config: SessionConfig, stream: ConnectFuture) -> Self {
+impl<T> Session<T> {
+    pub(crate) fn new(
+        config: SessionConfig,
+        stream: Box<Future<Item = T, Error = IoError>>,
+    ) -> Self {
         Self {
             config,
             state: SessionState::new(),
-            events: vec![],
+            events: VecDeque::new(),
             stream: StreamState::Connecting(stream),
         }
     }
+
     pub(crate) fn generate_transaction_id(&mut self) -> u32 {
         let id = self.state.next_transaction_id;
         self.state.next_transaction_id += 1;
@@ -162,8 +190,19 @@ impl Session {
         id
     }
 }
+
+pub struct Session<T> {
+    config: SessionConfig,
+    pub(crate) state: SessionState,
+    stream: StreamState<T>,
+    events: VecDeque<SessionEvent>,
+}
+
 // *** Internal API ***
-impl Session {
+impl<T> Session<T>
+where
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + 'static,
+{
     fn _send(&mut self, tx: Transmission) -> Result<()> {
         if let StreamState::Connected(ref mut st) = self.stream {
             st.start_send(tx)?;
@@ -173,11 +212,13 @@ impl Session {
         }
         Ok(())
     }
+
     fn send(&mut self, tx: Transmission) {
         if let Err(e) = self._send(tx) {
             self.on_disconnect(DisconnectionReason::SendFailed(e));
         }
     }
+
     fn register_tx_heartbeat_timeout(&mut self) -> Result<()> {
         if self.state.tx_heartbeat_ms.is_none() {
             warn!("Trying to register TX heartbeat timeout, but not set!");
@@ -231,16 +272,21 @@ impl Session {
         self.register_tx_heartbeat_timeout()?;
         Ok(())
     }
+
     fn on_disconnect(&mut self, reason: DisconnectionReason) {
         info!("Disconnected.");
-        self.events.push(SessionEvent::Disconnected(reason));
+        self.events.push_back(SessionEvent::Disconnected(reason));
+        self.stream = StreamState::Failed;
+        /*
         if let StreamState::Connected(ref mut strm) = self.stream {
             let _ = strm.get_mut().shutdown(::std::net::Shutdown::Both);
         }
+        */
         self.stream = StreamState::Failed;
         self.state.tx_heartbeat_timeout = None;
         self.state.rx_heartbeat_timeout = None;
     }
+
     fn on_stream_ready(&mut self) {
         debug!("Stream ready!");
         // Add credentials to the header list if specified
@@ -281,13 +327,14 @@ impl Session {
             }
         }
         if let Some((destination, ack_mode)) = sub_data {
-            self.events.push(SessionEvent::Message {
+            self.events.push_back(SessionEvent::Message {
                 destination,
                 ack_mode,
                 frame,
             });
         } else {
-            self.events.push(SessionEvent::SubscriptionlessFrame(frame));
+            self.events
+                .push_back(SessionEvent::SubscriptionlessFrame(frame));
         }
     }
 
@@ -310,7 +357,7 @@ impl Session {
         self.register_tx_heartbeat_timeout()?;
         self.register_rx_heartbeat_timeout()?;
 
-        self.events.push(SessionEvent::Connected);
+        self.events.push_back(SessionEvent::Connected);
 
         Ok(())
     }
@@ -328,7 +375,7 @@ impl Session {
             }
             if let Some(entry) = self.state.outstanding_receipts.remove(&receipt_id) {
                 let original_frame = entry.original_frame;
-                self.events.push(SessionEvent::Receipt {
+                self.events.push_back(SessionEvent::Receipt {
                     id: receipt_id,
                     original: original_frame,
                     receipt: frame,
@@ -393,15 +440,17 @@ impl Session {
         }
     }
 }
+
 #[derive(Debug)]
 pub enum DisconnectionReason {
-    RecvFailed(::std::io::Error),
-    ConnectFailed(::std::io::Error),
-    SendFailed(::std::io::Error),
+    RecvFailed(IoError),
+    ConnectFailed(IoError),
+    SendFailed(IoError),
     ClosedByOtherSide,
     HeartbeatTimeout,
     Requested,
 }
+
 pub enum SessionEvent {
     Connected,
     ErrorFrame(Frame),
@@ -419,25 +468,22 @@ pub enum SessionEvent {
     UnknownFrame(Frame),
     Disconnected(DisconnectionReason),
 }
-pub(crate) enum StreamState {
-    Connected(Framed<TcpStream, Codec>),
-    Connecting(ConnectFuture),
+
+pub(crate) enum StreamState<T> {
+    Connected(Framed<T, Codec>),
+    Connecting(Box<Future<Item = T, Error = IoError>>),
     Failed,
 }
-pub struct Session {
-    config: SessionConfig,
-    pub(crate) state: SessionState,
-    stream: StreamState,
-    events: Vec<SessionEvent>,
-}
-impl Stream for Session {
+
+impl<T> Stream for Session<T>
+where
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + 'static,
+{
     type Item = SessionEvent;
-    type Error = ::std::io::Error;
+    type Error = IoError;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         use frame::Transmission::*;
-        use std::io::Error as IoError;
-        use std::io::ErrorKind;
 
         while let Async::Ready(Some(val)) = self.poll_stream() {
             match val {
@@ -449,50 +495,32 @@ impl Stream for Session {
                     debug!("Received frame: {:?}", frame);
                     self.on_recv_data()?;
                     match frame.command {
-                        Command::Error => self.events.push(SessionEvent::ErrorFrame(frame)),
+                        Command::Error => self.events.push_back(SessionEvent::ErrorFrame(frame)),
                         Command::Receipt => self.handle_receipt(frame),
                         Command::Connected => self.on_connected_frame_received(frame)?,
                         Command::Message => self.on_message(frame),
-                        _ => self.events.push(SessionEvent::UnknownFrame(frame)),
+                        _ => self.events.push_back(SessionEvent::UnknownFrame(frame)),
                     };
                 }
             }
         }
 
-        let rxh = self
-            .state
-            .rx_heartbeat_timeout
-            .as_mut()
-            .map(|t| t.poll())
-            .unwrap_or(Ok(Async::NotReady))
-            .map_err(|_e| IoError::new(ErrorKind::Other, "timer"))?;
-
-        if let Async::Ready(_) = rxh {
+        if let Async::Ready(_) = poll_timeout(self.state.rx_heartbeat_timeout.as_mut())? {
             self.on_disconnect(DisconnectionReason::HeartbeatTimeout);
         }
 
-        let txh = self
-            .state
-            .tx_heartbeat_timeout
-            .as_mut()
-            .map(|t| t.poll())
-            .unwrap_or(Ok(Async::NotReady))
-            .map_err(|_e| IoError::new(ErrorKind::Other, "timer"))?;
-
-        if let Async::Ready(_) = txh {
+        if let Async::Ready(_) = poll_timeout(self.state.tx_heartbeat_timeout.as_mut())? {
             self.reply_to_heartbeat()?;
         }
 
         self.poll_stream_complete();
 
-        if self.events.len() > 0 {
-            if self.events.len() > 1 {
-                // make sure we get polled again, so we can get rid of our other events
+        match self.events.pop_front() {
+            None => Ok(Async::NotReady),
+            Some(ev) => {
                 task::current().notify();
+                Ok(Async::Ready(Some(ev)))
             }
-            Ok(Async::Ready(Some(self.events.remove(0))))
-        } else {
-            Ok(Async::NotReady)
         }
     }
 }

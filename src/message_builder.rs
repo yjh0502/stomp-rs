@@ -1,23 +1,26 @@
 use frame::Frame;
 use option_setter::OptionSetter;
 use session::{OutstandingReceipt, ReceiptRequest, Session};
+use tokio_io;
 
-pub struct MessageBuilder<'a> {
-    pub session: &'a mut Session,
+pub struct MessageBuilder<'a, T: 'static> {
+    pub session: &'a mut Session<T>,
     pub frame: Frame,
     pub receipt_request: Option<ReceiptRequest>,
 }
 
-impl<'a> MessageBuilder<'a> {
-    pub fn new(session: &'a mut Session, frame: Frame) -> Self {
+impl<'a, T> MessageBuilder<'a, T>
+where
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + 'static,
+{
+    pub fn new(session: &'a mut Session<T>, frame: Frame) -> Self {
         MessageBuilder {
-            session: session,
-            frame: frame,
+            session,
+            frame,
             receipt_request: None,
         }
     }
 
-    #[allow(dead_code)]
     pub fn send(self) {
         if self.receipt_request.is_some() {
             let request = self.receipt_request.unwrap();
@@ -29,10 +32,9 @@ impl<'a> MessageBuilder<'a> {
         self.session.send_frame(self.frame)
     }
 
-    #[allow(dead_code)]
-    pub fn with<T>(self, option_setter: T) -> MessageBuilder<'a>
+    pub fn with<O>(self, option_setter: O) -> MessageBuilder<'a, T>
     where
-        T: OptionSetter<MessageBuilder<'a>>,
+        O: OptionSetter<MessageBuilder<'a, T>>,
     {
         option_setter.set_option(self)
     }

@@ -1,6 +1,7 @@
 // Non-camel case types are used for Stomp Protocol version enum variants
 #![macro_use]
 #![allow(non_camel_case_types)]
+use std;
 use std::slice::Iter;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -129,13 +130,40 @@ pub enum StompVersion {
     Stomp_v1_1,
     Stomp_v1_2,
 }
+impl std::str::FromStr for StompVersion {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "1.0" => Ok(StompVersion::Stomp_v1_0),
+            "1.1" => Ok(StompVersion::Stomp_v1_1),
+            "1.2" => Ok(StompVersion::Stomp_v1_2),
+            _ => Err(()),
+        }
+    }
+}
+
+macro_rules! header_method {
+    ($name: ident, $key: tt, $ty: ident) => {
+        pub fn $name<'a>(&'a self) -> Option<$ty<'a>> {
+            let v = self.get_header($key)?;
+            Some($ty(v.get_value()))
+        }
+    };
+}
+
+macro_rules! header_method_parse {
+    ($name: ident, $key: tt, $ty: ident) => {
+        pub fn $name(&self) -> Option<$ty> {
+            let v = self.get_header($key)?;
+            let v = v.get_value().parse().ok()?;
+            Some($ty(v))
+        }
+    };
+}
 
 impl HeaderList {
     pub fn get_header<'a>(&'a self, key: &str) -> Option<&'a Header> {
-        self.headers.iter().find(|header| match **header {
-            ref h if h.get_key() == key => true,
-            _ => false,
-        })
+        self.headers.iter().find(|header| header.get_key() == key)
     }
 
     pub fn get_accept_version(&self) -> Option<Vec<StompVersion>> {
@@ -145,27 +173,9 @@ impl HeaderList {
         };
         let versions: Vec<StompVersion> = versions
             .split(',')
-            .filter_map(|v| match v.trim() {
-                "1.0" => Some(StompVersion::Stomp_v1_0),
-                "1.1" => Some(StompVersion::Stomp_v1_1),
-                "1.2" => Some(StompVersion::Stomp_v1_2),
-                _ => None,
-            }).collect();
+            .filter_map(|v| v.trim().parse::<StompVersion>().ok())
+            .collect();
         Some(versions)
-    }
-
-    pub fn get_ack<'a>(&'a self) -> Option<Ack<'a>> {
-        match self.get_header("ack") {
-            Some(h) => Some(Ack(h.get_value())),
-            None => None,
-        }
-    }
-
-    pub fn get_destination<'a>(&'a self) -> Option<Destination<'a>> {
-        match self.get_header("destination") {
-            Some(h) => Some(Destination(h.get_value())),
-            None => return None,
-        }
     }
 
     pub fn get_heart_beat(&self) -> Option<HeartBeat> {
@@ -184,106 +194,22 @@ impl HeaderList {
         Some(HeartBeat(spec_list[0], spec_list[1]))
     }
 
-    pub fn get_host<'a>(&'a self) -> Option<Host<'a>> {
-        match self.get_header("host") {
-            Some(h) => Some(Host(h.get_value())),
-            None => None,
-        }
-    }
+    header_method!(get_ack, "ack", Ack);
+    header_method!(get_destination, "destination", Destination);
+    header_method!(get_host, "host", Host);
+    header_method!(get_id, "id", Id);
+    header_method!(get_login, "login", Login);
+    header_method!(get_message_id, "message-id", MessageId);
+    header_method!(get_passcode, "passcode", Passcode);
+    header_method!(get_receipt, "receipt", Receipt);
+    header_method!(get_receipt_id, "receipt-id", ReceiptId);
+    header_method!(get_server, "server", Server);
+    header_method!(get_session, "session", Session);
+    header_method!(get_subscription, "subscription", Subscription);
+    header_method!(get_transaction, "transaction", Transaction);
 
-    pub fn get_id<'a>(&'a self) -> Option<Id<'a>> {
-        match self.get_header("id") {
-            Some(h) => Some(Id(h.get_value())),
-            None => None,
-        }
-    }
-
-    pub fn get_login<'a>(&'a self) -> Option<Login<'a>> {
-        match self.get_header("login") {
-            Some(h) => Some(Login(h.get_value())),
-            None => None,
-        }
-    }
-
-    pub fn get_message_id<'a>(&'a self) -> Option<MessageId<'a>> {
-        match self.get_header("message-id") {
-            Some(h) => Some(MessageId(h.get_value())),
-            None => None,
-        }
-    }
-
-    pub fn get_passcode<'a>(&'a self) -> Option<Passcode<'a>> {
-        match self.get_header("passcode") {
-            Some(h) => Some(Passcode(h.get_value())),
-            None => None,
-        }
-    }
-
-    pub fn get_receipt<'a>(&'a self) -> Option<Receipt<'a>> {
-        match self.get_header("receipt") {
-            Some(h) => Some(Receipt(h.get_value())),
-            None => None,
-        }
-    }
-
-    pub fn get_receipt_id<'a>(&'a self) -> Option<ReceiptId<'a>> {
-        match self.get_header("receipt-id") {
-            Some(h) => Some(ReceiptId(h.get_value())),
-            None => None,
-        }
-    }
-
-    pub fn get_server<'a>(&'a self) -> Option<Server<'a>> {
-        match self.get_header("server") {
-            Some(h) => Some(Server(h.get_value())),
-            None => None,
-        }
-    }
-
-    pub fn get_session<'a>(&'a self) -> Option<Session<'a>> {
-        match self.get_header("session") {
-            Some(h) => Some(Session(h.get_value())),
-            None => None,
-        }
-    }
-
-    pub fn get_subscription<'a>(&'a self) -> Option<Subscription<'a>> {
-        match self.get_header("subscription") {
-            Some(h) => Some(Subscription(h.get_value())),
-            None => None,
-        }
-    }
-
-    pub fn get_transaction<'a>(&'a self) -> Option<Transaction<'a>> {
-        match self.get_header("transaction") {
-            Some(h) => Some(Transaction(h.get_value())),
-            None => None,
-        }
-    }
-
-    pub fn get_version(&self) -> Option<Version> {
-        let version = match self.get_header("version") {
-            Some(h) => h.get_value(),
-            None => return None,
-        };
-        match (version).as_ref() {
-            "1.0" => Some(Version(StompVersion::Stomp_v1_0)), // TODO: Impl FromStr for StompVersion
-            "1.1" => Some(Version(StompVersion::Stomp_v1_1)),
-            "1.2" => Some(Version(StompVersion::Stomp_v1_2)),
-            _ => None,
-        }
-    }
-
-    pub fn get_content_length(&self) -> Option<ContentLength> {
-        let length = match self.get_header("content-length") {
-            Some(h) => h.get_value(),
-            None => return None,
-        };
-        match length.parse::<u32>().ok() {
-            Some(l) => Some(ContentLength(l)),
-            None => None,
-        }
-    }
+    header_method_parse!(get_version, "version", Version);
+    header_method_parse!(get_content_length, "content-length", ContentLength);
 }
 
 #[macro_export]
@@ -301,30 +227,34 @@ macro_rules! header_list [
 
 ];
 
-#[test]
-fn encode_return_carriage() {
-    let unencoded = "Hello\rWorld";
-    let encoded = r"Hello\rWorld";
-    assert!(encoded == Header::encode_value(unencoded));
-}
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn encode_return_carriage() {
+        let unencoded = "Hello\rWorld";
+        let encoded = r"Hello\rWorld";
+        assert!(encoded == Header::encode_value(unencoded));
+    }
 
-#[test]
-fn encode_newline() {
-    let unencoded = "Hello\nWorld";
-    let encoded = r"Hello\nWorld";
-    assert!(encoded == Header::encode_value(unencoded));
-}
+    #[test]
+    fn encode_newline() {
+        let unencoded = "Hello\nWorld";
+        let encoded = r"Hello\nWorld";
+        assert!(encoded == Header::encode_value(unencoded));
+    }
 
-#[test]
-fn encode_colon() {
-    let unencoded = "Hello:World";
-    let encoded = r"Hello\cWorld";
-    assert!(encoded == Header::encode_value(unencoded));
-}
+    #[test]
+    fn encode_colon() {
+        let unencoded = "Hello:World";
+        let encoded = r"Hello\cWorld";
+        assert!(encoded == Header::encode_value(unencoded));
+    }
 
-#[test]
-fn encode_slash() {
-    let unencoded = r"Hello\World";
-    let encoded = r"Hello\\World";
-    assert!(encoded == Header::encode_value(unencoded));
+    #[test]
+    fn encode_slash() {
+        let unencoded = r"Hello\World";
+        let encoded = r"Hello\\World";
+        assert!(encoded == Header::encode_value(unencoded));
+    }
 }

@@ -107,6 +107,14 @@ impl fmt::Display for Frame {
 }
 
 impl Frame {
+    fn empty(command: Command, headers: HeaderList) -> Self {
+        Self {
+            command,
+            headers,
+            body: Vec::new(),
+        }
+    }
+
     pub fn count_bytes(&self) -> usize {
         let mut space_required: usize = 0;
         // Add one to space calculations to make room for '\n'
@@ -155,119 +163,101 @@ impl Frame {
         debug!("write() complete.");
     }
 
-    pub fn connect(tx_heartbeat_ms: u32, rx_heartbeat_ms: u32) -> Frame {
+    pub fn connect(tx_heartbeat_ms: u32, rx_heartbeat_ms: u32) -> Self {
         let heart_beat = format!("{},{}", tx_heartbeat_ms, rx_heartbeat_ms);
-        let connect_frame = Frame {
-            command: Command::Connect,
-            headers: header_list![
+
+        Self::empty(
+            Command::Connect,
+            header_list![
                 ACCEPT_VERSION => "1.2",
                 HEART_BEAT => heart_beat.as_ref(),
                 CONTENT_LENGTH => "0"
             ],
-            body: Vec::new(),
-        };
-        connect_frame
+        )
     }
 
-    pub fn disconnect() -> Frame {
-        let disconnect_frame = Frame {
-            command: Command::Disconnect,
-            headers: header_list![
+    pub fn disconnect() -> Self {
+        Self::empty(
+            Command::Disconnect,
+            header_list![
                 RECEIPT => "msg/disconnect"
             ],
-            body: Vec::new(),
-        };
-        disconnect_frame
+        )
     }
 
-    pub fn subscribe(subscription_id: &str, destination: &str, ack_mode: AckMode) -> Frame {
-        let subscribe_frame = Frame {
-            command: Command::Subscribe,
-            headers: header_list![
+    pub fn subscribe(subscription_id: &str, destination: &str, ack_mode: AckMode) -> Self {
+        Self::empty(
+            Command::Subscribe,
+            header_list![
                 DESTINATION => destination,
                 ID => subscription_id,
-                ACK => ack_mode.as_text()
+                ACK => ack_mode.as_str()
             ],
-            body: Vec::new(),
-        };
-        subscribe_frame
+        )
     }
 
-    pub fn unsubscribe(subscription_id: &str) -> Frame {
-        let unsubscribe_frame = Frame {
-            command: Command::Unsubscribe,
-            headers: header_list![
+    pub fn unsubscribe(subscription_id: &str) -> Self {
+        Self::empty(
+            Command::Unsubscribe,
+            header_list![
                 ID => subscription_id
             ],
-            body: Vec::new(),
-        };
-        unsubscribe_frame
+        )
     }
 
-    pub fn ack(ack_id: &str) -> Frame {
-        let ack_frame = Frame {
-            command: Command::Ack,
-            headers: header_list![
+    pub fn ack(ack_id: &str) -> Self {
+        Self::empty(
+            Command::Ack,
+            header_list![
                 ID => ack_id
             ],
-            body: Vec::new(),
-        };
-        ack_frame
+        )
     }
 
-    pub fn nack(message_id: &str) -> Frame {
-        let nack_frame = Frame {
-            command: Command::Nack,
-            headers: header_list![
+    pub fn nack(message_id: &str) -> Self {
+        Self::empty(
+            Command::Nack,
+            header_list![
                 ID => message_id
             ],
-            body: Vec::new(),
-        };
-        nack_frame
+        )
     }
 
-    pub fn send(destination: &str, body: &[u8]) -> Frame {
-        let send_frame = Frame {
+    pub fn send(destination: &str, body: &[u8]) -> Self {
+        Self {
             command: Command::Send,
             headers: header_list![
                 DESTINATION => destination,
                 CONTENT_LENGTH => body.len().to_string().as_ref()
             ],
             body: body.into(),
-        };
-        send_frame
+        }
     }
 
-    pub fn begin(transaction_id: &str) -> Frame {
-        let begin_frame = Frame {
-            command: Command::Begin,
-            headers: header_list![
+    pub fn begin(transaction_id: &str) -> Self {
+        Self::empty(
+            Command::Begin,
+            header_list![
                 TRANSACTION => transaction_id
             ],
-            body: Vec::new(),
-        };
-        begin_frame
+        )
     }
 
-    pub fn abort(transaction_id: &str) -> Frame {
-        let abort_frame = Frame {
-            command: Command::Abort,
-            headers: header_list![
+    pub fn abort(transaction_id: &str) -> Self {
+        Self::empty(
+            Command::Abort,
+            header_list![
                 TRANSACTION => transaction_id
             ],
-            body: Vec::new(),
-        };
-        abort_frame
+        )
     }
 
-    pub fn commit(transaction_id: &str) -> Frame {
-        let commit_frame = Frame {
-            command: Command::Commit,
-            headers: header_list![
+    pub fn commit(transaction_id: &str) -> Self {
+        Self::empty(
+            Command::Commit,
+            header_list![
                 TRANSACTION => transaction_id
             ],
-            body: Vec::new(),
-        };
-        commit_frame
+        )
     }
 }

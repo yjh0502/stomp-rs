@@ -8,7 +8,7 @@ pub enum AckMode {
 }
 
 impl AckMode {
-    pub fn as_text(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match *self {
             AckMode::Auto => "auto",
             AckMode::Client => "client",

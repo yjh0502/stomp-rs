@@ -1,6 +1,5 @@
 // Non-camel case types are used for Stomp Protocol version enum variants
 #![macro_use]
-#![allow(non_camel_case_types)]
 use std;
 use std::slice::Iter;
 use unicode_segmentation::UnicodeSegmentation;
@@ -124,6 +123,7 @@ pub struct Transaction<'a>(pub &'a str);
 #[derive(Clone, Copy)]
 pub struct Version(pub StompVersion);
 
+#[allow(non_camel_case_types)]
 #[derive(Clone, Copy)]
 pub enum StompVersion {
     Stomp_v1_0,

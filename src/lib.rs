@@ -13,14 +13,15 @@ extern crate unicode_segmentation;
 #[macro_use]
 extern crate nom;
 
-pub mod connection;
 pub mod header;
+
 pub mod codec;
+pub mod connection;
 pub mod frame;
-pub mod session;
-pub mod subscription;
-pub mod transaction;
 pub mod message_builder;
-pub mod session_builder;
-pub mod subscription_builder;
 pub mod option_setter;
+pub mod session;
+pub mod session_builder;
+pub mod subscription;
+pub mod subscription_builder;
+pub mod transaction;

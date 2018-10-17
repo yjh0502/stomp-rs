@@ -30,13 +30,8 @@ pub struct Subscription {
     pub headers: HeaderList,
 }
 
-
 impl Subscription {
-    pub fn new(id: u32,
-               destination: &str,
-               ack_mode: AckMode,
-               headers: HeaderList)
-               -> Subscription {
+    pub fn new(id: u32, destination: &str, ack_mode: AckMode, headers: HeaderList) -> Subscription {
         Subscription {
             id: format!("stomp-rs/{}", id),
             destination: destination.to_string(),

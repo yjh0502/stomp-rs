@@ -1,5 +1,5 @@
 use codec::Codec;
-use connection::{self, Connection};
+use connection::{self, select_heartbeat};
 use frame::Transmission::{self, CompleteFrame, HeartBeat};
 use frame::{Command, Frame, ToFrameBody};
 use futures::*;
@@ -45,13 +45,25 @@ impl ReceiptRequest {
     }
 }
 
-fn poll_timeout(mut delay: Option<&mut Delay>) -> Poll<(), IoError> {
-    match delay {
-        None => Ok(Async::NotReady),
-        Some(ref mut delay) => match delay.poll() {
+struct HeartbeatDelay {
+    interval: u32,
+    delay: Delay,
+}
+impl HeartbeatDelay {
+    fn new(interval: u32) -> Self {
+        let delay = Delay::new(Instant::now() + Duration::from_millis(interval as _));
+        Self { interval, delay }
+    }
+}
+impl Future for HeartbeatDelay {
+    type Item = ();
+    type Error = IoError;
+
+    fn poll(&mut self) -> Poll<(), IoError> {
+        match self.delay.poll() {
             Err(_e) => Err(IoError::new(ErrorKind::Other, "timer")),
             Ok(res) => Ok(res),
-        },
+        }
     }
 }
 
@@ -59,10 +71,10 @@ pub struct SessionState {
     next_transaction_id: u32,
     next_subscription_id: u32,
     next_receipt_id: u32,
-    pub rx_heartbeat_ms: Option<u32>,
-    pub tx_heartbeat_ms: Option<u32>,
-    pub rx_heartbeat_timeout: Option<Delay>,
-    pub tx_heartbeat_timeout: Option<Delay>,
+
+    rx_heartbeat: Option<HeartbeatDelay>,
+    tx_heartbeat: Option<HeartbeatDelay>,
+
     pub subscriptions: HashMap<String, Subscription>,
     pub outstanding_receipts: HashMap<String, OutstandingReceipt>,
 }
@@ -73,10 +85,8 @@ impl SessionState {
             next_transaction_id: 0,
             next_subscription_id: 0,
             next_receipt_id: 0,
-            rx_heartbeat_ms: None,
-            rx_heartbeat_timeout: None,
-            tx_heartbeat_ms: None,
-            tx_heartbeat_timeout: None,
+            rx_heartbeat: None,
+            tx_heartbeat: None,
             subscriptions: HashMap::new(),
             outstanding_receipts: HashMap::new(),
         }
@@ -220,47 +230,24 @@ where
     }
 
     fn register_tx_heartbeat_timeout(&mut self) -> Result<()> {
-        if self.state.tx_heartbeat_ms.is_none() {
-            warn!("Trying to register TX heartbeat timeout, but not set!");
-            return Ok(());
+        if let Some(mut hb) = self.state.tx_heartbeat.take() {
+            hb.delay = Delay::new(Instant::now() + Duration::from_millis(hb.interval as _));
+            self.state.tx_heartbeat = Some(hb);
         }
-        let tx_heartbeat_ms = self.state.tx_heartbeat_ms.unwrap();
-        if tx_heartbeat_ms <= 0 {
-            debug!(
-                "Heartbeat transmission ms is {}, no need to register a callback.",
-                tx_heartbeat_ms
-            );
-            return Ok(());
-        }
-        let timeout = Delay::new(Instant::now() + Duration::from_millis(tx_heartbeat_ms as _));
-        self.state.tx_heartbeat_timeout = Some(timeout);
         Ok(())
     }
 
     fn register_rx_heartbeat_timeout(&mut self) -> Result<()> {
-        let rx_heartbeat_ms = self.state.rx_heartbeat_ms.unwrap_or_else(|| {
-            debug!(
-                "Trying to register RX heartbeat timeout but no \
-                 rx_heartbeat_ms was set. This is expected for receipt \
-                 of CONNECTED."
-            );
-            0
-        });
-        if rx_heartbeat_ms <= 0 {
-            debug!(
-                "Heartbeat receipt ms is {}, no need to register a callback.",
-                rx_heartbeat_ms
-            );
-            return Ok(());
+        if let Some(mut hb) = self.state.rx_heartbeat.take() {
+            hb.delay = Delay::new(Instant::now() + Duration::from_millis(hb.interval as _));
+            self.state.rx_heartbeat = Some(hb);
         }
 
-        let timeout = Delay::new(Instant::now() + Duration::from_millis(rx_heartbeat_ms as _));
-        self.state.rx_heartbeat_timeout = Some(timeout);
         Ok(())
     }
 
     fn on_recv_data(&mut self) -> Result<()> {
-        if self.state.rx_heartbeat_ms.is_some() {
+        if self.state.rx_heartbeat.is_some() {
             self.register_rx_heartbeat_timeout()?;
         }
         Ok(())
@@ -276,15 +263,11 @@ where
     fn on_disconnect(&mut self, reason: DisconnectionReason) {
         info!("Disconnected.");
         self.events.push_back(SessionEvent::Disconnected(reason));
+
+        // drop will disconnect undering AsyncIo
         self.stream = StreamState::Failed;
-        /*
-        if let StreamState::Connected(ref mut strm) = self.stream {
-            let _ = strm.get_mut().shutdown(::std::net::Shutdown::Both);
-        }
-        */
-        self.stream = StreamState::Failed;
-        self.state.tx_heartbeat_timeout = None;
-        self.state.rx_heartbeat_timeout = None;
+        self.state.tx_heartbeat = None;
+        self.state.rx_heartbeat = None;
     }
 
     fn on_stream_ready(&mut self) {
@@ -349,10 +332,11 @@ where
         };
 
         let (agreed_upon_tx_ms, agreed_upon_rx_ms) =
-            Connection::select_heartbeat(client_tx_ms, client_rx_ms, server_tx_ms, server_rx_ms);
-        self.state.rx_heartbeat_ms =
-            Some((agreed_upon_rx_ms as f32 * GRACE_PERIOD_MULTIPLIER) as u32);
-        self.state.tx_heartbeat_ms = Some(agreed_upon_tx_ms);
+            select_heartbeat(client_tx_ms, client_rx_ms, server_tx_ms, server_rx_ms);
+        self.state.rx_heartbeat = Some(HeartbeatDelay::new(
+            (agreed_upon_rx_ms as f32 * GRACE_PERIOD_MULTIPLIER) as u32,
+        ));
+        self.state.tx_heartbeat = Some(HeartbeatDelay::new(agreed_upon_tx_ms));
 
         self.register_tx_heartbeat_timeout()?;
         self.register_rx_heartbeat_timeout()?;
@@ -505,11 +489,11 @@ where
             }
         }
 
-        if let Async::Ready(_) = poll_timeout(self.state.rx_heartbeat_timeout.as_mut())? {
+        if let Async::Ready(_) = self.state.rx_heartbeat.as_mut().poll()? {
             self.on_disconnect(DisconnectionReason::HeartbeatTimeout);
         }
 
-        if let Async::Ready(_) = poll_timeout(self.state.tx_heartbeat_timeout.as_mut())? {
+        if let Async::Ready(_) = self.state.rx_heartbeat.as_mut().poll()? {
             self.reply_to_heartbeat()?;
         }
 

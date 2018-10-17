@@ -24,6 +24,7 @@ pub enum Command {
     Receipt,
     Error,
 }
+
 impl Command {
     pub fn as_str(&self) -> &'static str {
         use self::Command::*;
@@ -47,11 +48,13 @@ impl Command {
         }
     }
 }
+
 impl fmt::Display for Command {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}", self.as_str())
     }
 }
+
 pub trait ToFrameBody {
     fn to_frame_body<'a>(&'a self) -> &'a [u8];
 }
@@ -70,8 +73,7 @@ impl<'b> ToFrameBody for &'b str {
 
 impl ToFrameBody for String {
     fn to_frame_body<'a>(&'a self) -> &'a [u8] {
-        let string: &str = self.as_ref();
-        string.as_bytes()
+        self.as_str().as_bytes()
     }
 }
 

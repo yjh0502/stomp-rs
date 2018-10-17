@@ -59,21 +59,20 @@ impl HeaderList {
 }
 
 pub struct SuppressedHeader<'a>(pub &'a str);
-pub struct ContentType<'a>(pub &'a str);
 #[derive(Clone, Debug)]
-pub struct Header(pub String, pub String);
+pub struct Header(pub HeaderName, pub String);
 
 impl Header {
-    pub fn new(key: &str, value: &str) -> Header {
-        Header(Self::encode_value(key), Self::encode_value(value))
+    pub fn new(key: HeaderName, value: &str) -> Header {
+        Header(key, Self::encode_value(value))
     }
 
     pub fn new_raw<T: Into<String>, U: Into<String>>(key: T, value: U) -> Header {
-        Header(key.into(), value.into())
+        Header(HeaderName::from_str(&key.into()), value.into())
     }
 
     pub fn get_raw(&self) -> String {
-        format!("{}:{}", self.0, self.1)
+        format!("{}:{}", self.0.as_str(), self.1)
     }
 
     pub fn encode_value(value: &str) -> String {
@@ -90,8 +89,8 @@ impl Header {
         encoded
     }
 
-    pub fn get_key<'a>(&'a self) -> &'a str {
-        &self.0
+    pub fn get_key<'a>(&'a self) -> HeaderName {
+        self.0.clone()
     }
 
     pub fn get_value<'a>(&'a self) -> &'a str {
@@ -99,29 +98,89 @@ impl Header {
     }
 }
 
-// Headers in the Spec
-#[derive(Clone)]
-pub struct AcceptVersion(pub Vec<StompVersion>);
-pub struct Ack<'a>(pub &'a str);
-#[derive(Clone, Copy)]
-pub struct ContentLength(pub u32);
-pub struct Custom(pub Header);
-pub struct Destination<'a>(pub &'a str);
-#[derive(Clone, Copy)]
-pub struct HeartBeat(pub u32, pub u32);
-pub struct Host<'a>(pub &'a str);
-pub struct Id<'a>(pub &'a str);
-pub struct Login<'a>(pub &'a str);
-pub struct MessageId<'a>(pub &'a str);
-pub struct Passcode<'a>(pub &'a str);
-pub struct Receipt<'a>(pub &'a str);
-pub struct ReceiptId<'a>(pub &'a str);
-pub struct Server<'a>(pub &'a str);
-pub struct Session<'a>(pub &'a str);
-pub struct Subscription<'a>(pub &'a str);
-pub struct Transaction<'a>(pub &'a str);
-#[derive(Clone, Copy)]
-pub struct Version(pub StompVersion);
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub struct HeaderName {
+    inner: Repr<Custom>,
+}
+impl HeaderName {
+    pub fn from_str(src: &str) -> Self {
+        let encoded = Header::encode_value(src);
+        Self {
+            inner: Repr::Custom(Custom(encoded)),
+        }
+    }
+    pub fn as_str(&self) -> &str {
+        match self.inner {
+            Repr::Standard(v) => v.as_str(),
+            Repr::Custom(ref v) => v.0.as_str(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+enum Repr<T> {
+    Standard(StandardHeader),
+    Custom(T),
+}
+
+// Used to hijack the Hash impl
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+struct Custom(String);
+
+macro_rules! standard_headers {
+    (
+        $(
+            $(#[$docs:meta])*
+            ($konst:ident, $upcase:ident, $name:expr);
+        )+
+    ) => {
+        #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+        enum StandardHeader {
+            $(
+                $konst,
+            )+
+        }
+
+        $(
+            $(#[$docs])*
+            pub const $upcase: HeaderName = HeaderName {
+                inner: Repr::Standard(StandardHeader::$konst),
+            };
+        )+
+
+        impl StandardHeader {
+            #[inline]
+            fn as_str(&self) -> &'static str {
+                match *self {
+                    $(
+                    StandardHeader::$konst => $name,
+                    )+
+                }
+            }
+        }
+    }
+}
+
+standard_headers! {
+    (ContentType, CONTENT_TYPE, "content-type");
+    (AcceptVerion, ACCEPT_VERSION, "accept-version");
+    (Ack, ACK, "ack");
+    (ContentLength, CONTENT_LENGTH, "content-length");
+    (Destination, DESTINATION, "destination");
+    (HeartBeat, HEART_BEAT, "heart-beat");
+    (Host, HOST, "host");
+    (Id, ID, "id");
+    (Login, LOGIN, "login");
+    (MessageId, MESSAGE_ID, "message-id");
+    (Passcode, PASSCODE, "passcode");
+    (Receipt, RECEIPT, "receipt");
+    (ReceiptID, RECEIPT_ID, "receipt-id");
+    (Server, SERVER, "server");
+    (Session, SESSION, "session");
+    (Subscription, SUBSCRIPTION, "subscription");
+    (Transaction, TRANSACTION, "transaction");
+    (Version, VERSION, "version");
+}
 
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy)]
@@ -142,35 +201,16 @@ impl std::str::FromStr for StompVersion {
     }
 }
 
-macro_rules! header_method {
-    ($name: ident, $key: tt, $ty: ident) => {
-        pub fn $name<'a>(&'a self) -> Option<$ty<'a>> {
-            let v = self.get_header($key)?;
-            Some($ty(v.get_value()))
-        }
-    };
-}
-
-macro_rules! header_method_parse {
-    ($name: ident, $key: tt, $ty: ident) => {
-        pub fn $name(&self) -> Option<$ty> {
-            let v = self.get_header($key)?;
-            let v = v.get_value().parse().ok()?;
-            Some($ty(v))
-        }
-    };
-}
-
 impl HeaderList {
-    pub fn get_header<'a>(&'a self, key: &str) -> Option<&'a Header> {
-        self.headers.iter().find(|header| header.get_key() == key)
+    pub fn get<'a>(&'a self, key: HeaderName) -> Option<&'a str> {
+        self.headers
+            .iter()
+            .find(|header| header.get_key() == key)
+            .map(|v| v.get_value())
     }
 
     pub fn get_accept_version(&self) -> Option<Vec<StompVersion>> {
-        let versions: &str = match self.get_header("accept-version") {
-            Some(h) => h.get_value(),
-            None => return None,
-        };
+        let versions: &str = self.get(ACCEPT_VERSION)?;
         let versions: Vec<StompVersion> = versions
             .split(',')
             .filter_map(|v| v.trim().parse::<StompVersion>().ok())
@@ -178,9 +218,9 @@ impl HeaderList {
         Some(versions)
     }
 
-    pub fn get_heart_beat(&self) -> Option<HeartBeat> {
-        let spec = match self.get_header("heart-beat") {
-            Some(h) => h.get_value(),
+    pub fn get_heart_beat(&self) -> Option<(u32, u32)> {
+        let spec = match self.get(HEART_BEAT) {
+            Some(h) => h,
             None => return None,
         };
         let spec_list: Vec<u32> = spec
@@ -191,25 +231,8 @@ impl HeaderList {
         if spec_list.len() != 2 {
             return None;
         }
-        Some(HeartBeat(spec_list[0], spec_list[1]))
+        Some((spec_list[0], spec_list[1]))
     }
-
-    header_method!(get_ack, "ack", Ack);
-    header_method!(get_destination, "destination", Destination);
-    header_method!(get_host, "host", Host);
-    header_method!(get_id, "id", Id);
-    header_method!(get_login, "login", Login);
-    header_method!(get_message_id, "message-id", MessageId);
-    header_method!(get_passcode, "passcode", Passcode);
-    header_method!(get_receipt, "receipt", Receipt);
-    header_method!(get_receipt_id, "receipt-id", ReceiptId);
-    header_method!(get_server, "server", Server);
-    header_method!(get_session, "session", Session);
-    header_method!(get_subscription, "subscription", Subscription);
-    header_method!(get_transaction, "transaction", Transaction);
-
-    header_method_parse!(get_version, "version", Version);
-    header_method_parse!(get_content_length, "content-length", ContentLength);
 }
 
 #[macro_export]
@@ -224,7 +247,6 @@ macro_rules! header_list [
     $(header_list.push(Header::new($key, $value));)*
     header_list
   })
-
 ];
 
 #[cfg(test)]

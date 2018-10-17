@@ -1,5 +1,6 @@
 use connection::{Credentials, HeartBeat, OwnedCredentials};
-use header::{ContentType, Header, SuppressedHeader};
+use header::*;
+use header::{Header, SuppressedHeader};
 use message_builder::MessageBuilder;
 use session::{GenerateReceipt, ReceiptRequest};
 use session_builder::SessionBuilder;
@@ -23,18 +24,7 @@ impl<'a, 'b, T> OptionSetter<MessageBuilder<'b, T>> for SuppressedHeader<'a> {
         builder
             .frame
             .headers
-            .retain(|header| (*header).get_key() != key);
-        builder
-    }
-}
-
-impl<'a, 'b, T> OptionSetter<MessageBuilder<'b, T>> for ContentType<'a> {
-    fn set_option(self, mut builder: MessageBuilder<'b, T>) -> MessageBuilder<'b, T> {
-        let ContentType(content_type) = self;
-        builder
-            .frame
-            .headers
-            .push(Header::new("content-type", content_type));
+            .retain(|header| header.get_key().as_str() != key);
         builder
     }
 }
@@ -66,7 +56,7 @@ impl<'b> OptionSetter<SessionBuilder> for SuppressedHeader<'b> {
         builder
             .config
             .headers
-            .retain(|header| (*header).get_key() != key);
+            .retain(|header| header.get_key().as_str() != key);
         builder
     }
 }
@@ -81,7 +71,9 @@ impl<'a, T> OptionSetter<SubscriptionBuilder<'a, T>> for Header {
 impl<'a, 'b, T> OptionSetter<SubscriptionBuilder<'b, T>> for SuppressedHeader<'a> {
     fn set_option(self, mut builder: SubscriptionBuilder<'b, T>) -> SubscriptionBuilder<'b, T> {
         let SuppressedHeader(key) = self;
-        builder.headers.retain(|header| (*header).get_key() != key);
+        builder
+            .headers
+            .retain(|header| header.get_key().as_str() != key);
         builder
     }
 }
@@ -101,7 +93,7 @@ impl<'a, T> OptionSetter<MessageBuilder<'a, T>> for GenerateReceipt {
         builder
             .frame
             .headers
-            .push(Header::new("receipt", receipt_id.as_ref()));
+            .push(Header::new(RECEIPT, receipt_id.as_ref()));
         builder
     }
 }
@@ -113,7 +105,7 @@ impl<'a, T> OptionSetter<SubscriptionBuilder<'a, T>> for GenerateReceipt {
         builder.receipt_request = Some(ReceiptRequest::new(receipt_id.clone()));
         builder
             .headers
-            .push(Header::new("receipt", receipt_id.as_ref()));
+            .push(Header::new(RECEIPT, receipt_id.as_ref()));
         builder
     }
 }

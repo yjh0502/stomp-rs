@@ -1,6 +1,7 @@
 use frame::Frame;
 use frame::ToFrameBody;
 use header::Header;
+use header::TRANSACTION;
 use message_builder::MessageBuilder;
 use session::Session;
 use tokio_io;
@@ -29,7 +30,7 @@ where
         let mut send_frame = Frame::send(destination, body_convertible.to_frame_body());
         send_frame
             .headers
-            .push(Header::new("transaction", self.id.as_ref()));
+            .push(Header::new(TRANSACTION, self.id.as_ref()));
         MessageBuilder::new(self.session, send_frame)
     }
 

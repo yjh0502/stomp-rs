@@ -2,6 +2,7 @@ use connection::{HeartBeat, OwnedCredentials};
 use header::{Header, HeaderList};
 use option_setter::OptionSetter;
 
+use header::*;
 use session::Session;
 use std::io;
 use std::net::ToSocketAddrs;
@@ -42,9 +43,9 @@ impl SessionBuilder {
             credentials: None,
             heartbeat: HeartBeat(0, 0),
             headers: header_list![
-           "host" => host,
-           "accept-version" => "1.2",
-           "content-length" => "0"
+           HOST => host,
+           ACCEPT_VERSION => "1.2",
+           CONTENT_LENGTH => "0"
           ],
         };
         SessionBuilder { config: config }

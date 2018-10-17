@@ -1,6 +1,7 @@
 use bytes::BytesMut;
 use header::Header;
 use header::HeaderList;
+use header::*;
 use std::fmt;
 use std::fmt::Formatter;
 use std::str::from_utf8;
@@ -159,9 +160,9 @@ impl Frame {
         let connect_frame = Frame {
             command: Command::Connect,
             headers: header_list![
-                "accept-version" => "1.2",
-                "heart-beat" => heart_beat.as_ref(),
-                "content-length" => "0"
+                ACCEPT_VERSION => "1.2",
+                HEART_BEAT => heart_beat.as_ref(),
+                CONTENT_LENGTH => "0"
             ],
             body: Vec::new(),
         };
@@ -172,7 +173,7 @@ impl Frame {
         let disconnect_frame = Frame {
             command: Command::Disconnect,
             headers: header_list![
-                "receipt" => "msg/disconnect"
+                RECEIPT => "msg/disconnect"
             ],
             body: Vec::new(),
         };
@@ -183,9 +184,9 @@ impl Frame {
         let subscribe_frame = Frame {
             command: Command::Subscribe,
             headers: header_list![
-                "destination" => destination,
-                "id" => subscription_id,
-                "ack" => ack_mode.as_text()
+                DESTINATION => destination,
+                ID => subscription_id,
+                ACK => ack_mode.as_text()
             ],
             body: Vec::new(),
         };
@@ -196,7 +197,7 @@ impl Frame {
         let unsubscribe_frame = Frame {
             command: Command::Unsubscribe,
             headers: header_list![
-                "id" => subscription_id
+                ID => subscription_id
             ],
             body: Vec::new(),
         };
@@ -207,7 +208,7 @@ impl Frame {
         let ack_frame = Frame {
             command: Command::Ack,
             headers: header_list![
-                "id" => ack_id
+                ID => ack_id
             ],
             body: Vec::new(),
         };
@@ -218,7 +219,7 @@ impl Frame {
         let nack_frame = Frame {
             command: Command::Nack,
             headers: header_list![
-                "id" => message_id
+                ID => message_id
             ],
             body: Vec::new(),
         };
@@ -229,8 +230,8 @@ impl Frame {
         let send_frame = Frame {
             command: Command::Send,
             headers: header_list![
-                "destination" => destination,
-                "content-length" => body.len().to_string().as_ref()
+                DESTINATION => destination,
+                CONTENT_LENGTH => body.len().to_string().as_ref()
             ],
             body: body.into(),
         };
@@ -241,7 +242,7 @@ impl Frame {
         let begin_frame = Frame {
             command: Command::Begin,
             headers: header_list![
-                "transaction" => transaction_id
+                TRANSACTION => transaction_id
             ],
             body: Vec::new(),
         };
@@ -252,7 +253,7 @@ impl Frame {
         let abort_frame = Frame {
             command: Command::Abort,
             headers: header_list![
-                "transaction" => transaction_id
+                TRANSACTION => transaction_id
             ],
             body: Vec::new(),
         };
@@ -263,7 +264,7 @@ impl Frame {
         let commit_frame = Frame {
             command: Command::Commit,
             headers: header_list![
-                "transaction" => transaction_id
+                TRANSACTION => transaction_id
             ],
             body: Vec::new(),
         };

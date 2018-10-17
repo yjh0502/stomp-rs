@@ -3,7 +3,7 @@ use connection::{self, select_heartbeat};
 use frame::Transmission::{self, CompleteFrame, HeartBeat};
 use frame::{Command, Frame, ToFrameBody};
 use futures::*;
-use header::{self, Header};
+use header::Header;
 use message_builder::MessageBuilder;
 use session_builder::SessionConfig;
 use std::collections::hash_map::HashMap;
@@ -20,6 +20,8 @@ use tokio_codec::Framed;
 use tokio_io;
 use tokio_timer::Delay;
 use transaction::Transaction;
+
+use header::*;
 
 const GRACE_PERIOD_MULTIPLIER: f32 = 2.0;
 
@@ -157,7 +159,7 @@ where
     }
 
     pub fn acknowledge_frame(&mut self, frame: &Frame, which: AckOrNack) {
-        if let Some(header::Ack(ack_id)) = frame.headers.get_ack() {
+        if let Some(ack_id) = frame.headers.get(ACK) {
             let ack_frame = if let AckOrNack::Ack = which {
                 Frame::ack(ack_id)
             } else {
@@ -281,8 +283,8 @@ where
                     credentials.login, credentials.passcode
                 );
                 let mut headers = &mut self.config.headers;
-                headers.push(Header::new("login", &credentials.login));
-                headers.push(Header::new("passcode", &credentials.passcode));
+                headers.push(Header::new(LOGIN, &credentials.login));
+                headers.push(Header::new(PASSCODE, &credentials.passcode));
             }
             None => debug!("No credentials supplied."),
         }
@@ -292,7 +294,7 @@ where
         debug!("Using heartbeat: {},{}", client_tx_ms, client_rx_ms);
         self.config
             .headers
-            .push(Header::new("heart-beat", heart_beat_string.as_ref()));
+            .push(Header::new(HEART_BEAT, heart_beat_string.as_ref()));
 
         let connect_frame = Frame {
             command: Command::Connect,
@@ -304,7 +306,7 @@ where
     }
     fn on_message(&mut self, frame: Frame) {
         let mut sub_data = None;
-        if let Some(header::Subscription(sub_id)) = frame.headers.get_subscription() {
+        if let Some(sub_id) = frame.headers.get(SUBSCRIPTION) {
             if let Some(ref sub) = self.state.subscriptions.get(sub_id) {
                 sub_data = Some((sub.destination.clone(), sub.ack_mode));
             }
@@ -327,7 +329,7 @@ where
 
         // The timeouts the server is willing to provide
         let (server_tx_ms, server_rx_ms) = match connected_frame.headers.get_heart_beat() {
-            Some(header::HeartBeat(tx_ms, rx_ms)) => (tx_ms, rx_ms),
+            Some((tx_ms, rx_ms)) => (tx_ms, rx_ms),
             None => (0, 0),
         };
 
@@ -347,7 +349,7 @@ where
     }
     fn handle_receipt(&mut self, frame: Frame) {
         let receipt_id = {
-            if let Some(header::ReceiptId(receipt_id)) = frame.headers.get_receipt_id() {
+            if let Some(receipt_id) = frame.headers.get(RECEIPT_ID) {
                 Some(receipt_id.to_owned())
             } else {
                 None

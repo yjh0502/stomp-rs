@@ -1,6 +1,7 @@
 use bytes::BytesMut;
 use frame::Command;
 use frame::{Frame, Transmission};
+use header::CONTENT_LENGTH;
 use header::{Header, HeaderList};
 use nom::{self, anychar, line_ending};
 use std::io::Error as IoError;
@@ -43,7 +44,7 @@ named!(parse_header(&[u8]) -> Header,
 fn get_body<'a, 'b>(bytes: &'a [u8], headers: &'b [Header]) -> ::nom::IResult<&'a [u8], &'a [u8]> {
     let mut content_length = None;
     for header in headers {
-        if header.0 == "content-length" {
+        if header.0 == CONTENT_LENGTH {
             trace!("found content-length header");
             match header.1.parse::<u32>() {
                 Ok(value) => content_length = Some(value),

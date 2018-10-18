@@ -4,9 +4,6 @@ use option_setter::OptionSetter;
 
 use header::*;
 use session::{ConnectFuture, Session};
-use std::io;
-use std::net::ToSocketAddrs;
-use tokio::net::TcpStream;
 use tokio_io;
 
 #[derive(Clone)]

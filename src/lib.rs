@@ -5,7 +5,6 @@
 extern crate log;
 extern crate bytes;
 extern crate futures;
-extern crate tokio;
 extern crate tokio_codec;
 extern crate tokio_io;
 extern crate tokio_timer;

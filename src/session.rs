@@ -14,7 +14,6 @@ use std::io::Result;
 use std::time::{Duration, Instant};
 use subscription::{AckMode, AckOrNack, Subscription};
 use subscription_builder::SubscriptionBuilder;
-use tokio::net::TcpStream;
 use tokio_codec::Decoder;
 use tokio_codec::Framed;
 use tokio_io;

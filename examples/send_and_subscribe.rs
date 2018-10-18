@@ -9,9 +9,9 @@ use futures::future::join_all;
 use stomp::connection::{Credentials, HeartBeat};
 use stomp::frame::Frame;
 use stomp::header::*;
-use stomp::session::{Session, SessionEvent};
 use stomp::session_builder::SessionBuilder;
 use stomp::subscription::AckMode;
+use stomp::Session;
 use tokio::net::TcpStream;
 use tokio::prelude::*;
 
@@ -57,66 +57,65 @@ impl Future for ExampleSession {
     type Error = std::io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let msg = try_ready!(self.session.poll());
-        match msg {
+        use stomp::session::SessionEvent::*;
+
+        let msg = match try_ready!(self.session.poll()) {
             None => {
                 return Ok(Async::Ready(()));
             }
-            Some(msg) => {
-                match msg {
-                    SessionEvent::Connected => {
-                        self.on_connected();
-                    }
+            Some(msg) => msg,
+        };
 
-                    SessionEvent::Receipt {
-                        id: _id,
-                        original,
-                        receipt,
-                    } => {
-                        let destination = original.headers.get(DESTINATION).unwrap();
-                        println!(
-                            "Received a Receipt for our subscription to '{}':\n{}",
-                            destination, receipt
-                        );
-                    }
+        println!("msg: {:?}", msg);
+        match msg {
+            Connected => {
+                self.on_connected();
+            }
 
-                    SessionEvent::Message {
-                        destination: _destination,
-                        ack_mode: _ack_mode,
-                        frame,
-                    } => {
-                        let subscribed = if let Some(subscription) = frame.headers.get(SUBSCRIPTION)
-                        {
-                            self.subscription_id == Some(subscription.to_owned())
-                        } else {
-                            false
-                        };
+            Receipt {
+                id: _id,
+                original,
+                receipt,
+            } => {
+                let destination = original.headers.get(DESTINATION).unwrap();
+                println!(
+                    "Received a Receipt for our subscription to '{}':\n{}",
+                    destination, receipt
+                );
+            }
 
-                        if subscribed {
-                            self.on_gilbert_and_sullivan_reference(frame)
-                        }
-                    }
+            Message {
+                destination: _destination,
+                ack_mode: _ack_mode,
+                frame,
+            } => {
+                let subscribed = if let Some(subscription) = frame.headers.get(SUBSCRIPTION) {
+                    self.subscription_id == Some(subscription.to_owned())
+                } else {
+                    false
+                };
 
-                    SessionEvent::SubscriptionlessFrame(_frame) => {
-                        //
-                    }
-                    SessionEvent::UnknownFrame(_frame) => {
-                        //
-                    }
-
-                    SessionEvent::ErrorFrame(frame) => {
-                        println!("Something went horribly wrong: {}", frame);
-                    }
-
-                    SessionEvent::Disconnected(reason) => {
-                        println!(
-                            "Session #{} disconnected, reason={:?}",
-                            self.session_number, reason
-                        );
-                    }
+                if subscribed {
+                    self.on_gilbert_and_sullivan_reference(frame)
                 }
             }
+
+            Subscriptionless(_frame) | Unknown(_frame) => {
+                //
+            }
+
+            Error(frame) => {
+                println!("Something went horribly wrong: {}", frame);
+            }
+
+            Disconnected(reason) => {
+                println!(
+                    "Session #{} disconnected, reason={:?}",
+                    self.session_number, reason
+                );
+            }
         }
+
         Ok(Async::NotReady)
     }
 }
@@ -128,13 +127,16 @@ fn main() {
     let mut sessions = Vec::new();
     for session_number in 0..1 {
         let header = HeaderName::from_str("custom-client-id");
-        let session = SessionBuilder::new("127.0.0.1", 61613)
+
+        let addr = "127.0.0.1:61613".parse().unwrap();
+        let f = Box::new(TcpStream::connect(&addr));
+
+        let session = SessionBuilder::new()
             .with(Header::new(header, "hmspna4"))
             .with(SuppressedHeader("content-length"))
             .with(HeartBeat(5_000, 2_000))
             .with(Credentials("admin", "admin"))
-            .start()
-            .expect("failed to build session");
+            .build(f);
 
         let session = ExampleSession {
             session,

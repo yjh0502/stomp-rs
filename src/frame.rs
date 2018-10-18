@@ -102,33 +102,6 @@ impl Transmission {
 
 impl fmt::Display for Frame {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", self.to_str())
-    }
-}
-
-impl Frame {
-    fn empty(command: Command, headers: HeaderList) -> Self {
-        Self {
-            command,
-            headers,
-            body: Vec::new(),
-        }
-    }
-
-    pub fn count_bytes(&self) -> usize {
-        let mut space_required: usize = 0;
-        // Add one to space calculations to make room for '\n'
-        space_required += self.command.as_str().len() + 1;
-        space_required += self
-            .headers
-            .iter()
-            .fold(0, |length, header| length + header.get_raw().len() + 1);
-        space_required += 1; // Newline at end of headers
-        space_required += self.body.len();
-        space_required
-    }
-
-    pub fn to_str(&self) -> String {
         let space_required = self.count_bytes();
         let mut frame_string = String::with_capacity(space_required); // Faster to just allocate?
         frame_string.push_str(self.command.as_str());
@@ -143,11 +116,35 @@ impl Frame {
             Err(_) => "<Binary content>", // Space is wasted in this case. Could shrink to fit?
         };
         frame_string.push_str(body_string);
-        frame_string
+
+        write!(f, "{}", frame_string)
+    }
+}
+
+impl Frame {
+    fn empty(command: Command, headers: HeaderList) -> Self {
+        Self {
+            command,
+            headers,
+            body: Vec::new(),
+        }
+    }
+
+    fn count_bytes(&self) -> usize {
+        let mut space_required: usize = 0;
+        // Add one to space calculations to make room for '\n'
+        space_required += self.command.as_str().len() + 1;
+        space_required += self
+            .headers
+            .iter()
+            .fold(0, |length, header| length + header.get_raw().len() + 1);
+        space_required += 1; // Newline at end of headers
+        space_required += self.body.len();
+        space_required
     }
 
     pub fn write(&self, out: &mut BytesMut) {
-        debug!("Sending frame:\n{}", self.to_str());
+        debug!("Sending frame:\n{}", self.to_string());
         out.extend(self.command.as_str().as_bytes());
         out.extend("\n".as_bytes());
 
@@ -160,7 +157,6 @@ impl Frame {
         out.extend(&self.body);
 
         out.extend(&[0]);
-        debug!("write() complete.");
     }
 
     pub fn connect(tx_heartbeat_ms: u32, rx_heartbeat_ms: u32) -> Self {

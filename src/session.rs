@@ -101,28 +101,6 @@ impl SessionState {
     }
 }
 
-impl Session<TcpStream> {
-    pub fn reconnect(&mut self) -> ::std::io::Result<()> {
-        use std::io;
-        use std::net::ToSocketAddrs;
-
-        info!("Reconnecting...");
-
-        let address = (&self.config.host as &str, self.config.port)
-            .to_socket_addrs()?
-            .nth(0)
-            .ok_or(io::Error::new(
-                io::ErrorKind::Other,
-                "address provided resolved to nothing",
-            ))?;
-
-        let f = Box::new(TcpStream::connect(&address));
-        self.stream = StreamState::Connecting(f);
-        task::current().notify();
-        Ok(())
-    }
-}
-
 // *** Public API ***
 impl<T> Session<T>
 where
@@ -176,15 +154,14 @@ where
     }
 }
 
+pub type ConnectFuture<T> = Box<Future<Item = T, Error = IoError> + Send>;
+
 // *** pub(crate) API ***
 impl<T> Session<T>
 where
     T: tokio_io::AsyncWrite + tokio_io::AsyncRead + Send + 'static,
 {
-    pub(crate) fn new(
-        config: SessionConfig,
-        stream: Box<Future<Item = T, Error = IoError> + Send>,
-    ) -> Self {
+    pub(crate) fn new(config: SessionConfig, stream: ConnectFuture<T>) -> Self {
         Self {
             config,
             state: SessionState::new(),
@@ -327,8 +304,7 @@ where
                 frame,
             });
         } else {
-            self.events
-                .push_back(SessionEvent::SubscriptionlessFrame(frame));
+            self.events.push_back(SessionEvent::Subscriptionless(frame));
         }
     }
 
@@ -454,9 +430,10 @@ pub enum DisconnectionReason {
     Requested,
 }
 
+#[derive(Debug)]
 pub enum SessionEvent {
     Connected,
-    ErrorFrame(Frame),
+    Error(Frame),
     Receipt {
         id: String,
         original: Frame,
@@ -467,14 +444,14 @@ pub enum SessionEvent {
         ack_mode: AckMode,
         frame: Frame,
     },
-    SubscriptionlessFrame(Frame),
-    UnknownFrame(Frame),
+    Subscriptionless(Frame),
+    Unknown(Frame),
     Disconnected(DisconnectionReason),
 }
 
 pub(crate) enum StreamState<T> {
     Connected(Framed<T, Codec>),
-    Connecting(Box<Future<Item = T, Error = IoError> + Send>),
+    Connecting(ConnectFuture<T>),
     Failed,
 }
 
@@ -498,11 +475,11 @@ where
                     debug!("Received frame: {:?}", frame);
                     self.on_recv_data()?;
                     match frame.command {
-                        Command::Error => self.events.push_back(SessionEvent::ErrorFrame(frame)),
+                        Command::Error => self.events.push_back(SessionEvent::Error(frame)),
                         Command::Receipt => self.handle_receipt(frame),
                         Command::Connected => self.on_connected_frame_received(frame)?,
                         Command::Message => self.on_message(frame),
-                        _ => self.events.push_back(SessionEvent::UnknownFrame(frame)),
+                        _ => self.events.push_back(SessionEvent::Unknown(frame)),
                     };
                 }
             }

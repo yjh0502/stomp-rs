@@ -25,3 +25,5 @@ pub mod session_builder;
 pub mod subscription;
 pub mod subscription_builder;
 pub mod transaction;
+
+pub use session::Session;

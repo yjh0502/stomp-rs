@@ -105,9 +105,11 @@ pub struct HeaderName {
 impl HeaderName {
     pub fn from_str(src: &str) -> Self {
         let encoded = Header::encode_value(src);
-        Self {
-            inner: Repr::Custom(Custom(encoded)),
-        }
+        let inner = match encoded.parse::<StandardHeader>() {
+            Ok(h) => Repr::Standard(h),
+            Err(_e) => Repr::Custom(Custom(encoded)),
+        };
+        Self { inner }
     }
     pub fn as_str(&self) -> &str {
         match self.inner {
@@ -147,6 +149,18 @@ macro_rules! standard_headers {
                 inner: Repr::Standard(StandardHeader::$konst),
             };
         )+
+
+        impl std::str::FromStr for StandardHeader {
+            type Err = ();
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                match s {
+                    $(
+                    $name => Ok(StandardHeader::$konst ),
+                    )+
+                    _ => Err(())
+                }
+            }
+        }
 
         impl StandardHeader {
             #[inline]
@@ -219,10 +233,8 @@ impl HeaderList {
     }
 
     pub fn get_heart_beat(&self) -> Option<(u32, u32)> {
-        let spec = match self.get(HEART_BEAT) {
-            Some(h) => h,
-            None => return None,
-        };
+        let spec = self.get(HEART_BEAT)?;
+        trace!("hb: {}", spec);
         let spec_list: Vec<u32> = spec
             .split(',')
             .filter_map(|str_val| str_val.parse::<u32>().ok())

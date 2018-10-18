@@ -15,7 +15,7 @@ pub struct SubscriptionBuilder<'a, T: 'static> {
 
 impl<'a, T> SubscriptionBuilder<'a, T>
 where
-    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + 'static,
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + Send + 'static,
 {
     pub fn new(session: &'a mut Session<T>, destination: String) -> Self {
         SubscriptionBuilder {

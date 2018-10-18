@@ -1,20 +1,22 @@
 extern crate env_logger;
 extern crate stomp;
 extern crate tokio;
+extern crate tokio_io;
 #[macro_use]
 extern crate futures;
 
 use futures::future::join_all;
 use stomp::connection::{Credentials, HeartBeat};
 use stomp::frame::Frame;
-use stomp::header::{Destination, Header, SuppressedHeader};
+use stomp::header::*;
 use stomp::session::{Session, SessionEvent};
 use stomp::session_builder::SessionBuilder;
 use stomp::subscription::AckMode;
+use tokio::net::TcpStream;
 use tokio::prelude::*;
 
 struct ExampleSession {
-    session: Session,
+    session: Session<TcpStream>,
     destination: String,
     session_number: u32,
 
@@ -27,11 +29,12 @@ impl ExampleSession {
         let destination = &self.destination;
         println!("Subscribing to '{}'.", destination);
 
+        let header_name = HeaderName::from_str("custom-subscription-header");
         let subscription_id = self
             .session
             .subscription(destination)
             .with(AckMode::Auto)
-            .with(Header::new("custom-subscription-header", "lozenge"))
+            .with(Header::new(header_name, "lozenge"))
             .start();
 
         self.subscription_id = Some(subscription_id);
@@ -70,7 +73,7 @@ impl Future for ExampleSession {
                         original,
                         receipt,
                     } => {
-                        let Destination(destination) = original.headers.get_destination().unwrap();
+                        let destination = original.headers.get(DESTINATION).unwrap();
                         println!(
                             "Received a Receipt for our subscription to '{}':\n{}",
                             destination, receipt
@@ -82,12 +85,12 @@ impl Future for ExampleSession {
                         ack_mode: _ack_mode,
                         frame,
                     } => {
-                        let subscribed =
-                            if let Some(subscription) = frame.headers.get_subscription() {
-                                self.subscription_id == Some(subscription.0.to_owned())
-                            } else {
-                                false
-                            };
+                        let subscribed = if let Some(subscription) = frame.headers.get(SUBSCRIPTION)
+                        {
+                            self.subscription_id == Some(subscription.to_owned())
+                        } else {
+                            false
+                        };
 
                         if subscribed {
                             self.on_gilbert_and_sullivan_reference(frame)
@@ -124,11 +127,12 @@ fn main() {
     println!("Setting up client.");
     let mut sessions = Vec::new();
     for session_number in 0..1 {
+        let header = HeaderName::from_str("custom-client-id");
         let session = SessionBuilder::new("127.0.0.1", 61613)
-            .with(Header::new("custom-client-id", "hmspna4"))
+            .with(Header::new(header, "hmspna4"))
             .with(SuppressedHeader("content-length"))
             .with(HeartBeat(5_000, 2_000))
-            .with(Credentials("sullivan", "m1k4d0"))
+            .with(Credentials("admin", "admin"))
             .start()
             .expect("failed to build session");
 

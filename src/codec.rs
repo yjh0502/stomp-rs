@@ -3,7 +3,7 @@ use frame::Command;
 use frame::{Frame, Transmission};
 use header::CONTENT_LENGTH;
 use header::{Header, HeaderList};
-use nom::{self, anychar, line_ending};
+use nom::{anychar, line_ending};
 use std::io::Error as IoError;
 use tokio_io::codec::{Decoder, Encoder};
 
@@ -109,17 +109,18 @@ impl Decoder for Codec {
     type Error = IoError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Transmission>, IoError> {
-        use std::io::{Error, ErrorKind};
+        use nom::IResult;
+        use std::io::ErrorKind;
 
         trace!("decoding data: {:?}", src);
         let (point, data) = match parse_transmission(src) {
-            Ok((rest, data)) => (rest.len(), data),
-            Err(nom::Err::Incomplete(_needed)) => {
-                return Ok(None);
-            }
-            Err(e) => {
-                warn!("parse error: {:?}", e);
-                return Err(Error::new(ErrorKind::Other, format!("parse error: {}", e)));
+            IResult::Done(rest, data) => (rest.len(), data),
+            IResult::Incomplete(_) => return Ok(None),
+            IResult::Error(e) => {
+                return Err(IoError::new(
+                    ErrorKind::Other,
+                    format!("parse error: {}", e),
+                ));
             }
         };
         let len = src.len().saturating_sub(point);

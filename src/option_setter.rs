@@ -6,6 +6,7 @@ use session::{GenerateReceipt, ReceiptRequest};
 use session_builder::SessionBuilder;
 use subscription::AckMode;
 use subscription_builder::SubscriptionBuilder;
+use tokio_io;
 
 pub trait OptionSetter<T> {
     fn set_option(self, T) -> T;
@@ -85,7 +86,10 @@ impl<'a, T> OptionSetter<SubscriptionBuilder<'a, T>> for AckMode {
     }
 }
 
-impl<'a, T> OptionSetter<MessageBuilder<'a, T>> for GenerateReceipt {
+impl<'a, T> OptionSetter<MessageBuilder<'a, T>> for GenerateReceipt
+where
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + Send + 'static,
+{
     fn set_option(self, mut builder: MessageBuilder<'a, T>) -> MessageBuilder<'a, T> {
         let next_id = builder.session.generate_receipt_id();
         let receipt_id = format!("message/{}", next_id);
@@ -98,7 +102,10 @@ impl<'a, T> OptionSetter<MessageBuilder<'a, T>> for GenerateReceipt {
     }
 }
 
-impl<'a, T> OptionSetter<SubscriptionBuilder<'a, T>> for GenerateReceipt {
+impl<'a, T> OptionSetter<SubscriptionBuilder<'a, T>> for GenerateReceipt
+where
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + Send + 'static,
+{
     fn set_option(self, mut builder: SubscriptionBuilder<'a, T>) -> SubscriptionBuilder<'a, T> {
         let next_id = builder.session.generate_receipt_id();
         let receipt_id = format!("message/{}", next_id);

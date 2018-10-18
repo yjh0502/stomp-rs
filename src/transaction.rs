@@ -13,7 +13,7 @@ pub struct Transaction<'tx, T: 'static> {
 
 impl<'tx, T: 'static> Transaction<'tx, T>
 where
-    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + 'static,
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + Send + 'static,
 {
     pub fn new(session: &'tx mut Session<T>) -> Transaction<'tx, T> {
         Transaction {

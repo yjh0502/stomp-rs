@@ -11,7 +11,7 @@ pub struct MessageBuilder<'a, T: 'static> {
 
 impl<'a, T> MessageBuilder<'a, T>
 where
-    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + 'static,
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + Send + 'static,
 {
     pub fn new(session: &'a mut Session<T>, frame: Frame) -> Self {
         MessageBuilder {

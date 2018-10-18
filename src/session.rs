@@ -47,17 +47,17 @@ impl ReceiptRequest {
     }
 }
 
-struct HeartbeatDelay {
+struct HeartBeatDelay {
     interval: u32,
     delay: Delay,
 }
-impl HeartbeatDelay {
+impl HeartBeatDelay {
     fn new(interval: u32) -> Self {
         let delay = Delay::new(Instant::now() + Duration::from_millis(interval as _));
         Self { interval, delay }
     }
 }
-impl Future for HeartbeatDelay {
+impl Future for HeartBeatDelay {
     type Item = ();
     type Error = IoError;
 
@@ -68,14 +68,20 @@ impl Future for HeartbeatDelay {
         }
     }
 }
+fn poll_heartbeat(mut heartbeat: Option<&mut HeartBeatDelay>) -> Poll<(), IoError> {
+    match heartbeat {
+        Some(ref mut inner) => inner.poll(),
+        None => Ok(Async::NotReady),
+    }
+}
 
 pub struct SessionState {
     next_transaction_id: u32,
     next_subscription_id: u32,
     next_receipt_id: u32,
 
-    rx_heartbeat: Option<HeartbeatDelay>,
-    tx_heartbeat: Option<HeartbeatDelay>,
+    rx_heartbeat: Option<HeartBeatDelay>,
+    tx_heartbeat: Option<HeartBeatDelay>,
 
     pub subscriptions: HashMap<String, Subscription>,
     pub outstanding_receipts: HashMap<String, OutstandingReceipt>,
@@ -120,7 +126,7 @@ impl Session<TcpStream> {
 // *** Public API ***
 impl<T> Session<T>
 where
-    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + 'static,
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + Send + 'static,
 {
     pub fn send_frame(&mut self, fr: Frame) {
         self.send(Transmission::CompleteFrame(fr))
@@ -171,10 +177,13 @@ where
 }
 
 // *** pub(crate) API ***
-impl<T> Session<T> {
+impl<T> Session<T>
+where
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + Send + 'static,
+{
     pub(crate) fn new(
         config: SessionConfig,
-        stream: Box<Future<Item = T, Error = IoError>>,
+        stream: Box<Future<Item = T, Error = IoError> + Send>,
     ) -> Self {
         Self {
             config,
@@ -213,7 +222,7 @@ pub struct Session<T> {
 // *** Internal API ***
 impl<T> Session<T>
 where
-    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + 'static,
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + Send + 'static,
 {
     fn _send(&mut self, tx: Transmission) -> Result<()> {
         if let StreamState::Connected(ref mut st) = self.stream {
@@ -335,10 +344,17 @@ where
 
         let (agreed_upon_tx_ms, agreed_upon_rx_ms) =
             select_heartbeat(client_tx_ms, client_rx_ms, server_tx_ms, server_rx_ms);
-        self.state.rx_heartbeat = Some(HeartbeatDelay::new(
-            (agreed_upon_rx_ms as f32 * GRACE_PERIOD_MULTIPLIER) as u32,
-        ));
-        self.state.tx_heartbeat = Some(HeartbeatDelay::new(agreed_upon_tx_ms));
+
+        self.state.rx_heartbeat = match agreed_upon_rx_ms {
+            0 => None,
+            ms => Some(HeartBeatDelay::new(
+                (ms as f32 * GRACE_PERIOD_MULTIPLIER) as u32,
+            )),
+        };
+        self.state.tx_heartbeat = match agreed_upon_tx_ms {
+            0 => None,
+            ms => Some(HeartBeatDelay::new(ms)),
+        };
 
         self.register_tx_heartbeat_timeout()?;
         self.register_rx_heartbeat_timeout()?;
@@ -382,47 +398,48 @@ where
             self.on_disconnect(DisconnectionReason::SendFailed(e));
         }
     }
+
     fn poll_stream(&mut self) -> Async<Option<Transmission>> {
+        debug!("poll stream");
         use self::StreamState::*;
-        loop {
-            match ::std::mem::replace(&mut self.stream, Failed) {
-                Connected(mut fr) => match fr.poll() {
-                    Ok(Async::Ready(Some(r))) => {
-                        self.stream = Connected(fr);
-                        return Async::Ready(Some(r));
-                    }
-                    Ok(Async::Ready(None)) => {
-                        self.on_disconnect(DisconnectionReason::ClosedByOtherSide);
-                        return Async::NotReady;
-                    }
-                    Ok(Async::NotReady) => {
-                        self.stream = Connected(fr);
-                        return Async::NotReady;
-                    }
-                    Err(e) => {
-                        self.on_disconnect(DisconnectionReason::RecvFailed(e));
-                        return Async::NotReady;
-                    }
-                },
-                Connecting(mut tsn) => match tsn.poll() {
-                    Ok(Async::Ready(s)) => {
-                        let fr = Codec.framed(s);
-                        self.stream = Connected(fr);
-                        self.on_stream_ready();
-                    }
-                    Ok(Async::NotReady) => {
-                        self.stream = Connecting(tsn);
-                        return Async::NotReady;
-                    }
-                    Err(e) => {
-                        self.on_disconnect(DisconnectionReason::ConnectFailed(e));
-                        return Async::NotReady;
-                    }
-                },
-                Failed => {
-                    return Async::NotReady;
+        match ::std::mem::replace(&mut self.stream, Failed) {
+            Connected(mut fr) => match fr.poll() {
+                Ok(Async::Ready(Some(r))) => {
+                    self.stream = Connected(fr);
+                    Async::Ready(Some(r))
                 }
-            }
+                Ok(Async::Ready(None)) => {
+                    self.on_disconnect(DisconnectionReason::ClosedByOtherSide);
+                    Async::NotReady
+                }
+                Ok(Async::NotReady) => {
+                    self.stream = Connected(fr);
+                    Async::NotReady
+                }
+                Err(e) => {
+                    self.on_disconnect(DisconnectionReason::RecvFailed(e));
+                    Async::NotReady
+                }
+            },
+
+            Connecting(mut tsn) => match tsn.poll() {
+                Ok(Async::Ready(s)) => {
+                    let fr = Codec.framed(s);
+                    self.stream = Connected(fr);
+                    self.on_stream_ready();
+                    self.poll_stream()
+                }
+                Ok(Async::NotReady) => {
+                    self.stream = Connecting(tsn);
+                    Async::NotReady
+                }
+                Err(e) => {
+                    self.on_disconnect(DisconnectionReason::ConnectFailed(e));
+                    Async::NotReady
+                }
+            },
+
+            Failed => Async::NotReady,
         }
     }
 }
@@ -433,7 +450,7 @@ pub enum DisconnectionReason {
     ConnectFailed(IoError),
     SendFailed(IoError),
     ClosedByOtherSide,
-    HeartbeatTimeout,
+    HeartBeatTimeout,
     Requested,
 }
 
@@ -457,13 +474,13 @@ pub enum SessionEvent {
 
 pub(crate) enum StreamState<T> {
     Connected(Framed<T, Codec>),
-    Connecting(Box<Future<Item = T, Error = IoError>>),
+    Connecting(Box<Future<Item = T, Error = IoError> + Send>),
     Failed,
 }
 
 impl<T> Stream for Session<T>
 where
-    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + 'static,
+    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + Send + 'static,
 {
     type Item = SessionEvent;
     type Error = IoError;
@@ -491,11 +508,11 @@ where
             }
         }
 
-        if let Async::Ready(_) = self.state.rx_heartbeat.as_mut().poll()? {
-            self.on_disconnect(DisconnectionReason::HeartbeatTimeout);
+        if let Async::Ready(_) = poll_heartbeat(self.state.rx_heartbeat.as_mut())? {
+            self.on_disconnect(DisconnectionReason::HeartBeatTimeout);
         }
 
-        if let Async::Ready(_) = self.state.rx_heartbeat.as_mut().poll()? {
+        if let Async::Ready(_) = poll_heartbeat(self.state.tx_heartbeat.as_mut())? {
             self.reply_to_heartbeat()?;
         }
 

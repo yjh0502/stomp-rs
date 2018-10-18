@@ -4,13 +4,12 @@
 #[macro_use]
 extern crate log;
 extern crate bytes;
+#[macro_use]
 extern crate futures;
 extern crate tokio_codec;
 extern crate tokio_io;
 extern crate tokio_timer;
 extern crate unicode_segmentation;
-#[macro_use]
-extern crate nom;
 
 pub mod header;
 

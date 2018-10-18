@@ -12,10 +12,9 @@ version = "0.12.0"
 bytes = "0.4"
 futures = "0.1"
 log = "0.4"
-nom = "3"
 tokio-codec = "0.1"
-tokio-timer = "0.2"
 tokio-io = "0.1"
+tokio-timer = "0.2"
 unicode-segmentation = "1"
 
 [dev-dependencies]

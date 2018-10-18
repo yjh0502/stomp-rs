@@ -1,97 +1,128 @@
 use bytes::BytesMut;
 use frame::Command;
 use frame::{Frame, Transmission};
-use header::CONTENT_LENGTH;
-use header::{Header, HeaderList};
-use nom::{anychar, line_ending};
+use futures::prelude::*;
+use header::*;
+use std;
 use std::io::Error as IoError;
+use std::str;
 use tokio_io::codec::{Decoder, Encoder};
 
-named!(parse_server_command(&[u8]) -> Command,
-       alt!(
-           map!(tag!("CONNECTED"), |_| Command::Connected) |
-           map!(tag!("MESSAGE"), |_| Command::Message) |
-           map!(tag!("RECEIPT"), |_| Command::Receipt) |
-           map!(tag!("ERROR"), |_| Command::Error)
-       )
-);
-
-named!(parse_header_character(&[u8]) -> char,
-       alt!(
-           complete!(map!(tag!("\\n"), |_| '\n')) |
-           complete!(map!(tag!("\\r"), |_| '\r')) |
-           complete!(map!(tag!("\\c"), |_| ':')) |
-           complete!(map!(tag!("\\\\"), |_| '\\')) |
-           anychar
-       )
-);
-
-named!(parse_header(&[u8]) -> Header,
-       map!(
-           do_parse!(
-               k: flat_map!(is_not!(":\r\n"), many1!(parse_header_character)) >>
-               tag!(":") >>
-               v: flat_map!(is_not!("\r\n"), many1!(parse_header_character))>>
-               line_ending >>
-               (k, v)
-           ),
-           |(k, v)| {
-               Header::new_raw(k.into_iter().collect::<String>(), v.into_iter().collect::<String>())
-           }
-       )
-);
-
-fn get_body<'a, 'b>(bytes: &'a [u8], headers: &'b [Header]) -> ::nom::IResult<&'a [u8], &'a [u8]> {
-    let mut content_length = None;
-    for header in headers {
-        if header.0 == CONTENT_LENGTH {
-            trace!("found content-length header");
-            match header.1.parse::<u32>() {
-                Ok(value) => content_length = Some(value),
-                Err(error) => warn!("failed to parse content-length header: {}", error),
-            }
+macro_rules! opt_nr {
+    ($opt: expr) => {
+        match $opt {
+            Some(v) => v,
+            None => return Ok(Async::NotReady),
         }
-    }
-    if let Some(content_length) = content_length {
-        trace!("using content-length header: {}", content_length);
-        take!(bytes, content_length)
-    } else {
-        trace!("using many0 method to parse body");
-        map!(bytes, many0!(is_not!("\0")), |body| if body.len() == 0 {
-            &[]
-        } else {
-            body.into_iter().nth(0).unwrap()
-        })
-    }
+    };
 }
 
-named!(parse_frame(&[u8]) -> Frame,
-       map!(
-           do_parse!(
-               cmd: parse_server_command >>
-               line_ending >>
-               headers: many0!(parse_header) >>
-               line_ending >>
-               body: call!(get_body, &headers) >>
-               tag!("\0") >>
-               (cmd, headers, body)
-           ),
-           |(cmd, headers, body)| {
-               Frame {
-                   command: cmd,
-                   headers: HeaderList { headers },
-                   body: body.into()
-               }
-           }
-       )
-);
+#[derive(Debug)]
+pub enum ParseError {
+    Utf8,
+    ContentLength,
+    UnknownCommand(String),
+    Invalid,
+}
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(fmt, "{:?}", self)
+    }
+}
+impl std::error::Error for ParseError {}
 
-named!(parse_transmission(&[u8]) -> Transmission,
-       alt!(
-           map!(many1!(line_ending), |_| Transmission::HeartBeat) |
-           map!(parse_frame, |f| Transmission::CompleteFrame(f))
-       )
-);
+fn parse_transmission(src0: &[u8]) -> Poll<(Transmission, usize), ParseError> {
+    let (command, mut src) = try_ready!(get_line(src0));
+    if command.is_empty() {
+        return Ok(Async::Ready((
+            Transmission::HeartBeat,
+            src0.len() - src.len(),
+        )));
+    }
+
+    let command = parse_command(command)?;
+
+    let mut headers = HeaderList::new();
+
+    loop {
+        let (line, src1) = try_ready!(get_line(src));
+        src = src1;
+        if line.is_empty() {
+            break;
+        }
+        let header = try_ready!(parse_header(line));
+        headers.push(header);
+    }
+
+    let (src1, body) = match headers.get(CONTENT_LENGTH) {
+        Some(len) => {
+            let len = len.parse().map_err(|_e| ParseError::ContentLength)?;
+            if src.len() <= len {
+                return Ok(Async::NotReady);
+            }
+            if src[len] != b'\0' {
+                return Err(ParseError::Invalid);
+            }
+
+            (&src[(len + 1)..], Vec::from(&src[..len]))
+        }
+        None => {
+            let mut split = src.splitn(2, |b| *b == b'\0');
+            let body = opt_nr!(split.next());
+            let src = opt_nr!(split.next());
+            (src, Vec::from(body))
+        }
+    };
+    src = src1;
+
+    let frame = Frame {
+        command,
+        headers,
+        body,
+    };
+
+    Ok(Async::Ready((
+        Transmission::CompleteFrame(frame),
+        src0.len() - src.len(),
+    )))
+}
+
+fn parse_header(src: &[u8]) -> Poll<Header, ParseError> {
+    let src = str::from_utf8(src).map_err(|_e| ParseError::Utf8)?;
+    let mut parts = src.split(':');
+
+    let key = opt_nr!(parts.next());
+    let value = opt_nr!(parts.next());
+
+    Ok(Async::Ready(Header::new(HeaderName::from_str(key), value)))
+}
+
+fn parse_command(src: &[u8]) -> Result<Command, ParseError> {
+    let command = match src {
+        b"CONNECTED" => Command::Connected,
+        b"MESSAGE" => Command::Message,
+        b"RECEIPT" => Command::Receipt,
+        b"ERROR" => Command::Error,
+        unknown => {
+            return Err(ParseError::UnknownCommand(
+                str::from_utf8(unknown).unwrap().to_owned(),
+            ))
+        }
+    };
+    Ok(command)
+}
+
+fn get_line<'a>(src: &'a [u8]) -> Poll<(&'a [u8], &'a [u8]), ParseError> {
+    let mut split = src.splitn(2, |b| *b == b'\n');
+
+    let mut line = opt_nr!(split.next());
+    let remain = opt_nr!(split.next());
+
+    if !line.is_empty() && line[line.len() - 1] == b'\r' {
+        line = &line[..(line.len() - 1)];
+    }
+    Ok(Async::Ready((line, remain)))
+}
 
 pub struct Codec;
 
@@ -109,22 +140,13 @@ impl Decoder for Codec {
     type Error = IoError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Transmission>, IoError> {
-        use nom::IResult;
-        use std::io::ErrorKind;
-
-        trace!("decoding data: {:?}", src);
-        let (point, data) = match parse_transmission(src) {
-            IResult::Done(rest, data) => (rest.len(), data),
-            IResult::Incomplete(_) => return Ok(None),
-            IResult::Error(e) => {
-                return Err(IoError::new(
-                    ErrorKind::Other,
-                    format!("parse error: {}", e),
-                ));
+        match parse_transmission(&src) {
+            Ok(Async::NotReady) => Ok(None),
+            Ok(Async::Ready((t, len))) => {
+                src.split_to(len);
+                Ok(Some(t))
             }
-        };
-        let len = src.len().saturating_sub(point);
-        src.split_to(len);
-        Ok(Some(data))
+            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
+        }
     }
 }

@@ -16,7 +16,7 @@ use subscription::{AckMode, AckOrNack, Subscription};
 use subscription_builder::SubscriptionBuilder;
 use tokio_codec::Decoder;
 use tokio_codec::Framed;
-use tokio_io;
+use tokio_io::*;
 use tokio_timer::Delay;
 use transaction::Transaction;
 
@@ -103,7 +103,7 @@ impl SessionState {
 // *** Public API ***
 impl<T> Session<T>
 where
-    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + Send + 'static,
+    T: AsyncWrite + AsyncRead + Send + 'static,
 {
     pub fn send_frame(&mut self, fr: Frame) {
         self.send(Transmission::CompleteFrame(fr))
@@ -158,7 +158,7 @@ pub type ConnectFuture<T> = Box<Future<Item = T, Error = IoError> + Send>;
 // *** pub(crate) API ***
 impl<T> Session<T>
 where
-    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + Send + 'static,
+    T: AsyncWrite + AsyncRead + Send + 'static,
 {
     pub(crate) fn new(config: SessionConfig, stream: ConnectFuture<T>) -> Self {
         Self {
@@ -198,7 +198,7 @@ pub struct Session<T> {
 // *** Internal API ***
 impl<T> Session<T>
 where
-    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + Send + 'static,
+    T: AsyncWrite + AsyncRead + Send + 'static,
 {
     fn _send(&mut self, tx: Transmission) -> Result<()> {
         if let StreamState::Connected(ref mut st) = self.stream {
@@ -375,7 +375,6 @@ where
     }
 
     fn poll_stream(&mut self) -> Async<Option<Transmission>> {
-        debug!("poll stream");
         use self::StreamState::*;
         match ::std::mem::replace(&mut self.stream, Failed) {
             Connected(mut fr) => match fr.poll() {
@@ -456,7 +455,7 @@ pub(crate) enum StreamState<T> {
 
 impl<T> Stream for Session<T>
 where
-    T: tokio_io::AsyncWrite + tokio_io::AsyncRead + Send + 'static,
+    T: AsyncWrite + AsyncRead + Send + 'static,
 {
     type Item = SessionEvent;
     type Error = IoError;
